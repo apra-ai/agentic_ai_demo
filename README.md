@@ -132,6 +132,8 @@ python main.py "How many years are there between the founding of Google and Face
 ```bash
 python main.py "How many years are there between the founding of Google and Facebook?"
 python main.py "What is the population difference between Paris and Rome?"
+python main.py "What does example.txt say, and what is the average of the three team scores?"
+python main.py "Read docs/example.txt, summarize the main findings, and determine whether the average score is above 15."
 ```
 
 ## Erwartete CLI-Ausgabe
