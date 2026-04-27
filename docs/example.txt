@@ -1,0 +1,11 @@
+Seminar Demo Notes: Pilot Evaluation
+
+Three teams were evaluated in the pilot phase.
+Team A achieved a score of 12.
+Team B achieved a score of 18.
+Team C achieved a score of 24.
+
+The pilot shows a positive trend across all teams.
+Team C delivered the strongest performance.
+Team B was the most consistent team.
+The recommendation is to continue the pilot if the average score stays above 15.
