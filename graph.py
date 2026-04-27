@@ -26,7 +26,11 @@ class AgentState(TypedDict, total=False):
 SYSTEM_PROMPT = """You are a single research assistant that works in a ReAct-style loop.
 Decide whether a tool is needed before answering.
 Use tools for current facts, calculations, or local document lookup.
-When you have enough information, respond with a concise final answer.
+Use short, high-precision search queries such as company names or document names.
+Once you have the needed facts, stop searching and provide the answer.
+If the user asks for a difference, average, or other math, call the calculator tool.
+Your final answer must be plain text only.
+Never output XML, JSON, <function_calls>, or pseudo tool markup.
 Always explain uncertainty briefly if evidence is incomplete."""
 
 
@@ -45,20 +49,10 @@ def create_graph(settings: Settings):
 
     def agent_node(state: AgentState) -> AgentState:
         iterations = state.get("iterations", 0) + 1
-        response = llm_with_tools.invoke(state["messages"])
+        response = llm_with_tools.invoke(_build_agent_messages(state))
 
         if response.tool_calls and iterations >= state.get("max_iterations", settings.max_iterations):
-            forced_response = llm.invoke(
-                [
-                    SystemMessage(
-                        content=(
-                            "You have reached the maximum number of tool iterations. "
-                            "Provide the best possible final answer with the available evidence."
-                        )
-                    ),
-                    *state["messages"],
-                ]
-            )
+            forced_response = _finalize_with_observations(llm, state)
             return {
                 "messages": [forced_response],
                 "intermediate_steps": ["Agent: reached the iteration limit and produced a final answer."],
@@ -78,6 +72,13 @@ def create_graph(settings: Settings):
             "intermediate_steps": [agent_step],
             "iterations": iterations,
         }
+
+        if not response.tool_calls and _looks_like_tool_markup(agent_text):
+            forced_response = _finalize_with_observations(llm, state)
+            update["messages"] = [forced_response]
+            update["intermediate_steps"] = ["Agent: converted invalid pseudo tool markup into a final plain-text answer."]
+            update["final_answer"] = _message_to_text(forced_response)
+            return update
 
         if not response.tool_calls:
             update["final_answer"] = agent_text
@@ -164,3 +165,53 @@ def _message_to_text(message: BaseMessage) -> str:
     if isinstance(content, list):
         return " ".join(str(item) for item in content).strip()
     return str(content).strip()
+
+
+def _build_agent_messages(state: AgentState) -> list[BaseMessage]:
+    messages = list(state["messages"])
+    search_count = sum(1 for item in state.get("tool_outputs", []) if item["tool"] == "search_tool")
+    question = state.get("question", "").lower()
+
+    if search_count >= 2:
+        reminder = (
+            "You already have multiple search observations. "
+            "Do not call search_tool again unless the current evidence is clearly insufficient. "
+            "If the user asked for a difference, average, total, or comparison, either use calculator_tool now or answer directly."
+        )
+        if any(keyword in question for keyword in ["difference", "durchschnitt", "average", "sum", "compare", "vergleich"]):
+            reminder += " Prefer calculator_tool over another search."
+        messages.append(SystemMessage(content=reminder))
+
+    return messages
+
+
+def _finalize_with_observations(llm: AzureChatOpenAI, state: AgentState) -> AIMessage:
+    observations = state.get("tool_outputs", [])
+    observation_lines = [
+        f"- {item['tool']}: {item['output']}"
+        for item in observations
+    ] or ["- No tool outputs were recorded."]
+
+    final_prompt = [
+        SystemMessage(
+            content=(
+                "You are writing the final answer for a research assistant. "
+                "Use the observations below as evidence and respond in plain text only. "
+                "Do not call tools and do not output XML, JSON, or markup."
+            )
+        ),
+        HumanMessage(
+            content=(
+                f"Question: {state['question']}\n\n"
+                "Available observations:\n"
+                + "\n".join(observation_lines)
+                + "\n\nProvide a concise answer. If the evidence is insufficient, say so explicitly."
+            )
+        ),
+    ]
+    return llm.invoke(final_prompt)
+
+
+def _looks_like_tool_markup(text: str) -> bool:
+    lowered = text.lower()
+    return any(marker in lowered for marker in ["<function_calls>", "<invoke name=", "<parameter name="])

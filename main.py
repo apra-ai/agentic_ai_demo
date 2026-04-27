@@ -17,7 +17,7 @@ def main() -> None:
     print(result.get("final_answer", "No final answer produced."))
 
     print("\n=== Used Tools ===")
-    used_tools = result.get("used_tools", [])
+    used_tools = list(dict.fromkeys(result.get("used_tools", [])))
     print(", ".join(used_tools) if used_tools else "No tools were used.")
 
     print("\n=== Intermediate Steps ===")

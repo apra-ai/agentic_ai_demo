@@ -113,8 +113,8 @@ python main.py "Welche Firma hatte 2023 mehr Umsatz: Tesla oder BMW? Berechne de
 ## Beispielanfragen
 
 ```bash
-python main.py "Welche Firma hatte 2023 mehr Umsatz: Tesla oder BMW? Berechne den Unterschied."
-python main.py "Fasse die Informationen aus docs/example.txt zusammen und berechne anschliessend den Durchschnitt der genannten Werte."
+python main.py "How many years are there between the founding of Google and Facebook?"
+python main.py "What is the population difference between Paris and Rome?"
 ```
 
 ## Erwartete CLI-Ausgabe
