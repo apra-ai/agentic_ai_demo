@@ -8,6 +8,7 @@ Die Demo zeigt die typischen Bausteine eines agentischen Systems:
 - Tool Use fuer Recherche, Berechnung und lokale Dokumente
 - einen einfachen ReAct-aehnlichen Loop
 - Memory und State im LangGraph-Zustand
+- explizite Sicht auf Planung, Memory, Reasoning und Entscheidungslogik
 
 ## Projektstruktur
 
@@ -42,9 +43,13 @@ Gespeichert werden unter anderem:
 
 - `question`
 - `messages`
+- `plan`
 - `intermediate_steps`
 - `tool_outputs`
 - `used_tools`
+- `reasoning_log`
+- `decision_log`
+- `memory_log`
 - `final_answer`
 - `iterations`
 
@@ -62,6 +67,18 @@ Gespeichert werden unter anderem:
 4. Der `tools`-Node fuehrt das Tool aus und schreibt die Observation in den State.
 5. Der Agent bewertet erneut, ob weitere Schritte noetig sind.
 6. Sobald genug Informationen vorliegen oder das Iterationslimit erreicht ist, wird eine finale Antwort erzeugt.
+
+## Bezug zur Seminararbeit
+
+Die Demo bildet die Komponenten aus Kapitel 3.3 direkt in der CLI und im LangGraph-State ab:
+
+- `Planung`: Zu Beginn wird aus der Nutzerfrage ein einfacher Arbeitsplan erzeugt und unter `=== Plan ===` ausgegeben.
+- `Tool-Nutzung`: Tool Calls und Tool Outputs bleiben sichtbar und werden unter `=== Used Tools ===` und `=== Intermediate Steps ===` protokolliert.
+- `Memory`: Der State speichert Frage, Observations, verwendete Tools und Memory-Snapshots. Diese Kurzzeit-Memory erscheint unter `=== Memory ===`.
+- `Reasoning`: Die Demo protokolliert, warum der Agent weitere Informationen benoetigt oder warum er zum finalen Antwortschritt uebergeht. Diese Eintraege erscheinen unter `=== Reasoning ===`.
+- `Entscheidungslogik`: Konkrete Entscheidungen wie `call search_tool`, `call calculator_tool` oder `stop and answer` werden unter `=== Decision Log ===` sichtbar gemacht.
+
+Damit zeigt die Demo nicht nur das Endergebnis, sondern auch die internen Komponenten, auf die sich deine Seminararbeit bezieht.
 
 ## Stop Condition
 
@@ -119,20 +136,39 @@ python main.py "What is the population difference between Paris and Rome?"
 
 ## Erwartete CLI-Ausgabe
 
-Die Anwendung gibt drei Bereiche aus:
+Die Anwendung gibt mehrere Bereiche aus:
 
+- Plan
 - finale Antwort
 - verwendete Tools
+- Memory
+- Reasoning
+- Entscheidungslogik
 - Zwischenschritte des Agenten
 
 Beispielhaft:
 
 ```text
+=== Plan ===
+1. Analyse the question and identify which facts or numbers are needed.
+2. Collect evidence for the relevant entities before answering.
+3. Use the calculator tool to compute the requested value from the collected numbers.
+4. Synthesize the observations into a concise final answer with a short uncertainty note if needed.
+
 === Final Answer ===
 BMW hatte 2023 den hoeheren Umsatz. Der Unterschied betraegt ...
 
 === Used Tools ===
 search_tool, calculator_tool
+
+=== Memory ===
+1. Iteration 0 | question='Welche Firma hatte 2023 mehr Umsatz: Tesla oder BMW?...' | observations=0 | used_tools=[] | next='agent analysis'
+
+=== Reasoning ===
+1. Reasoning: the current state does not yet support a reliable final answer, so the agent requests search_tool.
+
+=== Decision Log ===
+1. Decision: call search_tool next.
 
 === Intermediate Steps ===
 1. Agent: decided to call tool(s): search_tool
@@ -153,7 +189,7 @@ search_tool, calculator_tool
 Diese Implementierung ist bewusst einfach gehalten:
 
 - keine Multi-Agent-Architektur
-- kein komplexes Planning-Modul
+- kein komplexes Planning-Modul, sondern ein bewusst einfaches Plan-Schema fuer die Demo
 - keine Vektordatenbank
 - keine Persistenz ueber einen Prozesslauf hinaus
 

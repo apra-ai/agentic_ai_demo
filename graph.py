@@ -15,9 +15,13 @@ from tools import build_tools
 class AgentState(TypedDict, total=False):
     question: str
     messages: Annotated[list[BaseMessage], add_messages]
+    plan: list[str]
     intermediate_steps: Annotated[list[str], operator.add]
     tool_outputs: Annotated[list[dict[str, str]], operator.add]
     used_tools: Annotated[list[str], operator.add]
+    reasoning_log: Annotated[list[str], operator.add]
+    decision_log: Annotated[list[str], operator.add]
+    memory_log: Annotated[list[str], operator.add]
     final_answer: str
     iterations: int
     max_iterations: int
@@ -56,6 +60,13 @@ def create_graph(settings: Settings):
             return {
                 "messages": [forced_response],
                 "intermediate_steps": ["Agent: reached the iteration limit and produced a final answer."],
+                "reasoning_log": [
+                    "Reasoning: enough evidence had been collected, so the loop was stopped at the iteration limit and summarized into a final answer."
+                ],
+                "decision_log": [
+                    "Decision: stop the loop because the maximum number of iterations was reached."
+                ],
+                "memory_log": [_build_memory_snapshot(state, final_answer=_message_to_text(forced_response), iteration=iterations)],
                 "iterations": iterations,
                 "final_answer": _message_to_text(forced_response),
             }
@@ -70,6 +81,9 @@ def create_graph(settings: Settings):
         update: AgentState = {
             "messages": [response],
             "intermediate_steps": [agent_step],
+            "reasoning_log": [_describe_agent_reasoning(state, response)],
+            "decision_log": _describe_agent_decisions(state, response),
+            "memory_log": [_build_memory_snapshot(state, next_action=_describe_next_action(response), iteration=iterations)],
             "iterations": iterations,
         }
 
@@ -77,11 +91,19 @@ def create_graph(settings: Settings):
             forced_response = _finalize_with_observations(llm, state)
             update["messages"] = [forced_response]
             update["intermediate_steps"] = ["Agent: converted invalid pseudo tool markup into a final plain-text answer."]
+            update["reasoning_log"] = [
+                "Reasoning: the previous model output was not a valid final answer, so the system reformulated it from the stored observations."
+            ]
+            update["decision_log"] = [
+                "Decision: ignore invalid pseudo tool markup and force a final plain-text answer."
+            ]
+            update["memory_log"] = [_build_memory_snapshot(state, final_answer=_message_to_text(forced_response), iteration=iterations)]
             update["final_answer"] = _message_to_text(forced_response)
             return update
 
         if not response.tool_calls:
             update["final_answer"] = agent_text
+            update["memory_log"] = [_build_memory_snapshot(state, final_answer=agent_text, iteration=iterations)]
 
         return update
 
@@ -94,6 +116,9 @@ def create_graph(settings: Settings):
         tool_outputs: list[dict[str, str]] = []
         used_tools: list[str] = []
         intermediate_steps: list[str] = []
+        reasoning_log: list[str] = []
+        decision_log: list[str] = []
+        memory_log: list[str] = []
 
         for tool_call in last_message.tool_calls:
             tool_name = tool_call["name"]
@@ -116,12 +141,25 @@ def create_graph(settings: Settings):
             intermediate_steps.append(
                 f"Tool {tool_name}: input={tool_call['args']} | output={str(result)[:200]}"
             )
+            reasoning_log.append(_describe_tool_reasoning(tool_name, str(result)))
+            decision_log.append(_describe_tool_execution(tool_name, tool_call["args"]))
+            memory_log.append(
+                _build_memory_snapshot(
+                    state,
+                    stored_tool=tool_name,
+                    stored_output=str(result),
+                    iteration=state.get("iterations", 0),
+                )
+            )
 
         return {
             "messages": tool_messages,
             "tool_outputs": tool_outputs,
             "used_tools": used_tools,
             "intermediate_steps": intermediate_steps,
+            "reasoning_log": reasoning_log,
+            "decision_log": decision_log,
+            "memory_log": memory_log,
         }
 
     def should_continue(state: AgentState) -> str:
@@ -150,9 +188,23 @@ def build_initial_state(question: str, max_iterations: int = 5) -> AgentState:
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(content=question),
         ],
+        "plan": _build_initial_plan(question),
         "intermediate_steps": [],
         "tool_outputs": [],
         "used_tools": [],
+        "reasoning_log": [
+            "Reasoning: the system starts by analyzing the question and deciding whether external information, local documents, or calculation are required."
+        ],
+        "decision_log": [
+            "Decision: begin in the agent node and evaluate whether a tool call is necessary."
+        ],
+        "memory_log": [
+            _build_memory_snapshot(
+                {"question": question, "tool_outputs": [], "used_tools": []},
+                next_action="agent analysis",
+                iteration=0,
+            )
+        ],
         "iterations": 0,
         "max_iterations": max_iterations,
     }
@@ -215,3 +267,98 @@ def _finalize_with_observations(llm: AzureChatOpenAI, state: AgentState) -> AIMe
 def _looks_like_tool_markup(text: str) -> bool:
     lowered = text.lower()
     return any(marker in lowered for marker in ["<function_calls>", "<invoke name=", "<parameter name="])
+
+
+def _build_initial_plan(question: str) -> list[str]:
+    question_lower = question.lower()
+    plan = ["Analyse the question and identify which facts or numbers are needed."]
+
+    if any(keyword in question_lower for keyword in ["docs/", ".txt", "document", "dokument", "datei"]):
+        plan.append("Retrieve relevant passages from local documents in the docs folder.")
+
+    if any(keyword in question_lower for keyword in ["which", "welche", "compare", "vergleich", "more", "mehr", "less", "weniger"]):
+        plan.append("Collect evidence for the relevant entities before answering.")
+
+    if any(keyword in question_lower for keyword in ["difference", "differenz", "berechne", "average", "durchschnitt", "sum", "gesamt"]):
+        plan.append("Use the calculator tool to compute the requested value from the collected numbers.")
+
+    plan.append("Synthesize the observations into a concise final answer with a short uncertainty note if needed.")
+    return plan
+
+
+def _describe_agent_reasoning(state: AgentState, response: AIMessage) -> str:
+    if response.tool_calls:
+        tool_names = ", ".join(call["name"] for call in response.tool_calls)
+        return f"Reasoning: the current state does not yet support a reliable final answer, so the agent requests {tool_names}."
+
+    if state.get("tool_outputs"):
+        return "Reasoning: the collected observations are sufficient to stop the loop and formulate the final answer."
+
+    return "Reasoning: the question can be answered directly without external tools."
+
+
+def _describe_agent_decisions(state: AgentState, response: AIMessage) -> list[str]:
+    if response.tool_calls:
+        return [
+            f"Decision: call {tool_call['name']} next."
+            for tool_call in response.tool_calls
+        ]
+
+    if state.get("tool_outputs"):
+        return ["Decision: stop tool use and generate the final answer from the available evidence."]
+
+    return ["Decision: answer directly because no external tool is required."]
+
+
+def _describe_tool_reasoning(tool_name: str, result: str) -> str:
+    preview = _truncate_text(result, 120)
+    return f"Reasoning: the observation from {tool_name} was added to working memory for the next agent step: {preview}"
+
+
+def _describe_tool_execution(tool_name: str, tool_args: Any) -> str:
+    return f"Decision: execute {tool_name} with input {tool_args}."
+
+
+def _describe_next_action(response: AIMessage) -> str:
+    if response.tool_calls:
+        return "tool execution"
+    return "final answer"
+
+
+def _build_memory_snapshot(
+    state: AgentState | dict[str, Any],
+    *,
+    next_action: str | None = None,
+    stored_tool: str | None = None,
+    stored_output: str | None = None,
+    final_answer: str | None = None,
+    iteration: int,
+) -> str:
+    question = str(state.get("question", ""))
+    used_tools = state.get("used_tools", [])
+    observations = state.get("tool_outputs", [])
+
+    parts = [
+        f"Iteration {iteration}",
+        f"question='{_truncate_text(question, 90)}'",
+        f"observations={len(observations)}",
+        f"used_tools={list(dict.fromkeys(used_tools))}",
+    ]
+
+    if stored_tool:
+        parts.append(f"stored={stored_tool}")
+    if stored_output:
+        parts.append(f"latest_observation='{_truncate_text(stored_output, 110)}'")
+    if next_action:
+        parts.append(f"next='{next_action}'")
+    if final_answer:
+        parts.append(f"final_answer='{_truncate_text(final_answer, 110)}'")
+
+    return " | ".join(parts)
+
+
+def _truncate_text(value: str, max_length: int) -> str:
+    cleaned = " ".join(value.split())
+    if len(cleaned) <= max_length:
+        return cleaned
+    return cleaned[: max_length - 3] + "..."
