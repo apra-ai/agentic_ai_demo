@@ -107,7 +107,7 @@ python main.py
 Direkt mit Frage:
 
 ```bash
-python main.py "Welche Firma hatte 2023 mehr Umsatz: Tesla oder BMW? Berechne den Unterschied."
+python main.py "How many years are there between the founding of Google and Facebook?"
 ```
 
 ## Beispielanfragen
